@@ -1,0 +1,271 @@
+// CivicPulse Prisma Schema
+// Step 2: Complete Core Schema for Problem-Centric Smart-City Platform
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../server/node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Roles for Role-Based Access Control (RBAC)
+enum Role {
+  CITIZEN
+  AUTHORITY
+  FIELD_WORKER
+}
+
+// Civic Problem Categories
+enum Category {
+  POTHOLE
+  GARBAGE
+  STREETLIGHT
+  DRAINAGE
+  WATER_LEAKAGE
+  DAMAGED_ROAD
+  OTHER
+}
+
+// Problem Severity Levels
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// Incident Lifecycle Status Flow:
+// REPORTED -> VERIFIED -> ASSIGNED -> IN_PROGRESS -> RESOLVED_PENDING_VERIFICATION -> RESOLVED (or REOPENED)
+enum Status {
+  REPORTED
+  VERIFIED
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED_PENDING_VERIFICATION
+  RESOLVED
+  REOPENED
+}
+
+// Notification Category Types
+enum NotificationType {
+  INCIDENT_UPDATE
+  ASSIGNMENT
+  SLA_WARNING
+  RESOLUTION_VERIFICATION
+  SYSTEM
+}
+
+// 1. USERS MODEL
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  password     String
+  name         String
+  phone        String?
+  role         Role     @default(CITIZEN)
+  department   String?  // Applicable for AUTHORITY & FIELD_WORKER (e.g. "Roads & Maintenance", "Sanitation", "Electrical")
+  avatarUrl    String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relationships
+  reportsCreated       Report[]            @relation("CitizenReports")
+  incidentsCreated     Incident[]          @relation("CitizenCreatedIncidents")
+  supportedIncidents   IncidentSupporter[]
+  workerAssignments    Assignment[]        @relation("WorkerAssignments")
+  authorityAssignments Assignment[]        @relation("AuthorityAssignments")
+  statusUpdates        StatusUpdate[]
+  resolutions          Resolution[]
+  notifications        Notification[]
+  resolutionVerifications ResolutionVerification[]
+
+  @@map("users")
+}
+
+// 2. INCIDENTS MODEL (Problem-Centric Correlated Entity)
+model Incident {
+  id              String   @id @default(uuid())
+  title           String
+  description     String   @db.Text
+  category        Category
+  severity        Severity @default(MEDIUM)
+  status          Status   @default(REPORTED)
+  
+  // Spatial Location Data
+  latitude        Float
+  longitude       Float
+  address         String?
+  city            String?  @default("Smart City")
+
+  // Problem-Centric Analytics & Prioritization Metrics
+  supportCount    Int      @default(1)    // Number of citizen reports / supporters
+  communityImpact Float    @default(1.0)  // Calculated impact multiplier
+  priorityScore   Float    @default(0.0)  // Dynamic score based on severity, supporters, age, location risk
+  
+  // SLA Management (Critical=24h, High=48h, Medium=72h, Low=168h)
+  slaHours        Int      @default(72)
+  slaDeadline     DateTime
+  isSlaBreached   Boolean  @default(false)
+
+  // Target Department & Origin
+  department      String?
+  createdById     String?
+  createdBy       User?    @relation("CitizenCreatedIncidents", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relationships
+  reports         Report[]
+  supporters      IncidentSupporter[]
+  assignments     Assignment[]
+  statusUpdates   StatusUpdate[]
+  resolution      Resolution?
+  notifications   Notification[]
+
+  @@index([latitude, longitude])
+  @@index([category])
+  @@index([status])
+  @@index([priorityScore(sort: Desc)])
+  @@index([slaDeadline])
+  @@index([department])
+  @@map("incidents")
+}
+
+// 3. REPORTS MODEL (Individual Citizen Submissions correlated into an Incident)
+model Report {
+  id          String   @id @default(uuid())
+  citizenId   String
+  incidentId  String
+  category    Category
+  title       String
+  description String   @db.Text
+  latitude    Float
+  longitude   Float
+  address     String?
+  imageUrl    String?
+  createdAt   DateTime @default(now())
+
+  // Relationships
+  citizen     User     @relation("CitizenReports", fields: [citizenId], references: [id], onDelete: Cascade)
+  incident    Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@index([latitude, longitude])
+  @@index([incidentId])
+  @@index([citizenId])
+  @@map("reports")
+}
+
+// 4. INCIDENT SUPPORTERS MODEL (Citizens supporting/upvoting an existing problem)
+model IncidentSupporter {
+  id         String   @id @default(uuid())
+  incidentId String
+  userId     String
+  createdAt  DateTime @default(now())
+
+  // Relationships
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([incidentId, userId])
+  @@map("incident_supporters")
+}
+
+// 5. ASSIGNMENTS MODEL (Authority assigning Field Workers to Incidents)
+model Assignment {
+  id           String    @id @default(uuid())
+  incidentId   String
+  workerId     String
+  assignedById String
+  notes        String?   @db.Text
+  assignedAt   DateTime  @default(now())
+  completedAt  DateTime?
+
+  // Relationships
+  incident     Incident  @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  worker       User      @relation("WorkerAssignments", fields: [workerId], references: [id], onDelete: Cascade)
+  assignedBy   User      @relation("AuthorityAssignments", fields: [assignedById], references: [id], onDelete: Cascade)
+
+  @@index([incidentId])
+  @@index([workerId])
+  @@map("assignments")
+}
+
+// 6. STATUS UPDATES MODEL (Audit Log of Incident Workflow Progress)
+model StatusUpdate {
+  id         String   @id @default(uuid())
+  incidentId String
+  userId     String?
+  oldStatus  Status?
+  newStatus  Status
+  comment    String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  // Relationships
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([incidentId])
+  @@map("status_updates")
+}
+
+// 7. RESOLUTION MODEL (Field Worker Evidence & Citizen Verification)
+model Resolution {
+  id                   String                   @id @default(uuid())
+  incidentId           String                   @unique
+  workerId             String
+  workNotes            String                   @db.Text
+  beforeImageUrl       String?
+  afterImageUrl        String                   // Mandatory proof of work photo
+  isVerifiedByCitizen  Boolean?                 // null = pending verification, true = accepted, false = disputed/reopened
+  citizenFeedback      String?                  @db.Text
+  resolvedAt           DateTime                 @default(now())
+  verifiedAt           DateTime?
+
+  // Relationships
+  incident             Incident                 @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+  worker               User                     @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  verifications        ResolutionVerification[]
+
+  @@map("resolution")
+}
+
+// 9. RESOLUTION VERIFICATION MODEL (Multi-citizen verification per resolution cycle)
+model ResolutionVerification {
+  id           String     @id @default(uuid())
+  resolutionId String
+  citizenId    String
+  confirmed    Boolean
+  reason       String?    @db.Text
+  createdAt    DateTime   @default(now())
+
+  // Relationships
+  resolution   Resolution @relation(fields: [resolutionId], references: [id], onDelete: Cascade)
+  citizen      User       @relation(fields: [citizenId], references: [id], onDelete: Cascade)
+
+  @@unique([resolutionId, citizenId])
+  @@map("resolution_verifications")
+}
+
+// 8. NOTIFICATIONS MODEL (SLA warnings, status updates, assignment notifications)
+model Notification {
+  id         String           @id @default(uuid())
+  userId     String
+  incidentId String?
+  title      String
+  message    String           @db.Text
+  type       NotificationType
+  isRead     Boolean          @default(false)
+  createdAt  DateTime         @default(now())
+
+  // Relationships
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  incident   Incident?        @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}

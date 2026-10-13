@@ -1,0 +1,26 @@
+{
+  "name": "civicpulse",
+  "version": "1.0.0",
+  "description": "CivicPulse - Intelligent Smart-City Issue Reporting & Management Platform",
+  "private": true,
+  "scripts": {
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client",
+    "install:all": "npm install --prefix server && npm install --prefix client",
+    "prisma:generate": "npx prisma generate --schema=./prisma/schema.prisma"
+  },
+  "keywords": [
+    "civicpulse",
+    "smart-city",
+    "issue-reporting",
+    "full-stack"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "prisma": "^6.19.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3"
+  }
+}
