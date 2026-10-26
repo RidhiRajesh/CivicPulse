@@ -1,7 +1,26 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_key_civicpulse_2026_super_secure';
+/**
+ * Retrieve the active JWT secret.
+ * Enforces strict presence in production and disallows hardcoded fallbacks.
+ */
+const getJwtSecret = () => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || !secret.trim()) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('FATAL: JWT_SECRET environment variable is missing or empty. A secure JWT_SECRET is required in production.');
+    }
+    throw new Error('JWT_SECRET environment variable is missing or empty. Please configure JWT_SECRET.');
+  }
+  return secret;
+};
+
+// Fail fast in production if JWT_SECRET is not configured
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || !process.env.JWT_SECRET.trim())) {
+  throw new Error('FATAL: JWT_SECRET environment variable is missing or empty. A secure JWT_SECRET is required in production.');
+}
+
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
 /**
@@ -23,20 +42,22 @@ const comparePassword = async (password, hashedPassword) => {
  * Generate JWT token for an authenticated user
  */
 const generateToken = (user) => {
+  const secret = getJwtSecret();
   const payload = {
     id: user.id,
     email: user.email,
     role: user.role,
   };
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  return jwt.sign(payload, secret, { expiresIn: JWT_EXPIRES_IN });
 };
 
 /**
  * Verify JWT token
  */
 const verifyToken = (token) => {
+  const secret = getJwtSecret();
   try {
-    return jwt.verify(token, JWT_SECRET);
+    return jwt.verify(token, secret);
   } catch (error) {
     return null;
   }
@@ -57,4 +78,5 @@ module.exports = {
   generateToken,
   verifyToken,
   sanitizeUser,
+  getJwtSecret,
 };

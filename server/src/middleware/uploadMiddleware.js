@@ -8,17 +8,8 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Storage Configuration
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `report-${uniqueSuffix}${ext}`);
-  },
-});
+// Storage Configuration: Memory storage buffers file in memory for streaming to Cloudinary or saving via local fallback
+const storage = multer.memoryStorage();
 
 // File Filter for Image Validation
 const fileFilter = (req, file, cb) => {

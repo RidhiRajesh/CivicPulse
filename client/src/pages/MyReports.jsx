@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getMyReports, verifyCitizenResolution } from '../services/api';
+import { getMyReports, verifyCitizenResolution, getImageUrl } from '../services/api';
 import LocationViewerModal from '../components/LocationViewerModal';
 import {
   Activity,
@@ -248,7 +248,7 @@ export default function MyReports() {
                     {report.imageUrl && (
                       <div className="rounded-xl overflow-hidden border border-slate-200 max-h-48">
                         <img
-                          src={report.imageUrl.startsWith('http') ? report.imageUrl : `http://localhost:5000${report.imageUrl}`}
+                          src={getImageUrl(report.imageUrl)}
                           alt={report.title}
                           className="w-full h-44 object-cover"
                           onError={(e) => {
@@ -303,7 +303,7 @@ export default function MyReports() {
                               <div className="pt-1">
                                 <span className="text-slate-500 text-[11px] block mb-1">Resolution Evidence Photo:</span>
                                 <a
-                                  href={resolution.afterImageUrl.startsWith('http') ? resolution.afterImageUrl : `http://localhost:5000${resolution.afterImageUrl}`}
+                                  href={getImageUrl(resolution.afterImageUrl)}
                                   target="_blank"
                                   rel="noreferrer"
                                   className="inline-flex items-center space-x-1 px-2.5 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 rounded-lg text-xs font-bold transition"

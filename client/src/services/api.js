@@ -2,6 +2,37 @@ import axios from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
 
+/**
+ * Resolves an image path to a safe displayable URL across development and production:
+ * 1. Returns empty string if path is missing or empty.
+ * 2. Preserves already-absolute URLs (http, https, data, blob) unchanged (e.g. Cloudinary).
+ * 3. For relative paths (e.g. /uploads/image.png):
+ *    - Derives backend origin from VITE_API_BASE_URL when configured (stripping /api).
+ *    - Falls back to local development server (http://localhost:5000) when not configured.
+ * 4. Normalizes leading/trailing slashes to prevent malformed URLs.
+ */
+export const getImageUrl = (imagePath) => {
+  if (!imagePath || typeof imagePath !== 'string' || !imagePath.trim()) {
+    return '';
+  }
+  const trimmedPath = imagePath.trim();
+  if (/^(https?:|data:|blob:)/i.test(trimmedPath)) {
+    return trimmedPath;
+  }
+  const cleanImage = trimmedPath.startsWith('/') ? trimmedPath : `/${trimmedPath}`;
+  const apiBase = import.meta.env.VITE_API_BASE_URL;
+  if (apiBase && /^https?:\/\//i.test(apiBase)) {
+    try {
+      const url = new URL(apiBase);
+      const basePath = url.pathname.replace(/\/api\/?$/i, '').replace(/\/+$/, '');
+      return `${url.origin}${basePath}${cleanImage}`;
+    } catch {
+      return `http://localhost:5000${cleanImage}`;
+    }
+  }
+  return `http://localhost:5000${cleanImage}`;
+};
+
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {

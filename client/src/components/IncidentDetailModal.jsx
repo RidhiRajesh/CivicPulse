@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getImageUrl } from '../services/api';
 import {
   X,
   Shield,
@@ -289,7 +290,7 @@ export default function IncidentDetailModal({
                 <div className="pt-2">
                   <span className="text-xs text-slate-600 block mb-1.5 font-medium">Resolution Evidence Photo:</span>
                   <a
-                    href={incident.resolution.afterImageUrl.startsWith('http') ? incident.resolution.afterImageUrl : `http://localhost:5000${incident.resolution.afterImageUrl}`}
+                    href={getImageUrl(incident.resolution.afterImageUrl)}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-100 text-emerald-900 border border-emerald-300 rounded-xl text-xs font-bold hover:bg-emerald-200 transition"
@@ -408,7 +409,7 @@ export default function IncidentDetailModal({
 
                       {report.imageUrl && (
                         <a
-                          href={report.imageUrl.startsWith('http') ? report.imageUrl : `http://localhost:5000${report.imageUrl}`}
+                          href={getImageUrl(report.imageUrl)}
                           target="_blank"
                           rel="noreferrer"
                           className="text-blue-600 hover:text-blue-700 font-bold underline flex items-center space-x-1"

@@ -1,6 +1,7 @@
 const prisma = require('../config/prisma');
 const { calculatePriorityScore, calculateCommunityImpact, getPriorityBreakdown } = require('../services/priorityService');
 const { calculateSlaDetails, processSlaEscalations } = require('../services/slaService');
+const { uploadImage, deleteCloudinaryAsset } = require('../services/cloudinaryService');
 
 /**
  * GET /api/incidents
@@ -653,6 +654,7 @@ const addProgressUpdate = async (req, res) => {
  * Submit work resolution evidence & transition status IN_PROGRESS -> RESOLVED_PENDING_VERIFICATION (FIELD_WORKER only)
  */
 const completeWork = async (req, res) => {
+  let uploadedAsset = null;
   try {
     const { id } = req.params;
     const workerId = req.user.id;
@@ -690,7 +692,8 @@ const completeWork = async (req, res) => {
     // Evidence image path handling
     let imageUrl = '/uploads/resolution-evidence.jpg';
     if (req.file) {
-      imageUrl = `/uploads/${req.file.filename}`;
+      uploadedAsset = await uploadImage(req.file, 'civicpulse/resolutions');
+      imageUrl = uploadedAsset ? uploadedAsset.secureUrl : imageUrl;
     } else if (req.body.afterImageUrl) {
       imageUrl = req.body.afterImageUrl;
     }
@@ -748,10 +751,17 @@ const completeWork = async (req, res) => {
       resolution,
     });
   } catch (error) {
+    if (uploadedAsset && uploadedAsset.publicId) {
+      await deleteCloudinaryAsset(uploadedAsset.publicId).catch((cleanupErr) => {
+        console.error('Failed to clean up Cloudinary asset after work completion error:', cleanupErr.message);
+      });
+    }
     console.error('completeWork Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to submit work resolution.',
+      message: error.message && error.message.includes('Cloudinary')
+        ? error.message
+        : 'Failed to submit work resolution.',
     });
   }
 };

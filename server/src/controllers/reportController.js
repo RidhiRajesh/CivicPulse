@@ -1,6 +1,7 @@
 const prisma = require('../config/prisma');
 const { findBestIncidentMatch } = require('../services/correlationService');
 const { calculatePriorityScore, calculateCommunityImpact } = require('../services/priorityService');
+const { uploadImage, deleteCloudinaryAsset } = require('../services/cloudinaryService');
 
 const VALID_CATEGORIES = [
   'POTHOLE',
@@ -89,8 +90,10 @@ const createReport = async (req, res) => {
     }
 
     let imageUrl = null;
+    let uploadedAsset = null;
     if (req.file) {
-      imageUrl = `/uploads/${req.file.filename}`;
+      uploadedAsset = await uploadImage(req.file, 'civicpulse/reports');
+      imageUrl = uploadedAsset ? uploadedAsset.secureUrl : null;
     }
 
     const normalizedCategory = category.toUpperCase();
@@ -322,10 +325,17 @@ const createReport = async (req, res) => {
       },
     });
   } catch (error) {
+    if (uploadedAsset && uploadedAsset.publicId) {
+      await deleteCloudinaryAsset(uploadedAsset.publicId).catch((cleanupErr) => {
+        console.error('Failed to clean up Cloudinary asset after report creation error:', cleanupErr.message);
+      });
+    }
     console.error('Create Report Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to submit issue report due to a server error.',
+      message: error.message && error.message.includes('Cloudinary')
+        ? error.message
+        : 'Failed to submit issue report due to a server error.',
     });
   }
 };

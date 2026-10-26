@@ -1,16 +1,14 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Activity, User, Mail, Lock, Phone, Building2, AlertCircle, ArrowRight } from 'lucide-react';
+import { Activity, User, Mail, Lock, Phone, AlertCircle, ArrowRight } from 'lucide-react';
 
 export default function Register() {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     password: '',
-    role: 'CITIZEN',
     phone: '',
-    department: '',
   });
 
   const [error, setError] = useState('');
@@ -118,21 +116,6 @@ export default function Register() {
             </div>
           </div>
 
-          {/* Role Selection */}
-          <div className="space-y-1.5">
-            <label className="text-sm font-semibold text-slate-700">User Role</label>
-            <select
-              name="role"
-              value={formData.role}
-              onChange={handleChange}
-              className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm text-slate-900 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition"
-            >
-              <option value="CITIZEN">Citizen (Report & Track Issues)</option>
-              <option value="AUTHORITY">Authority (Manage & Assign)</option>
-              <option value="FIELD_WORKER">Field Worker (Resolve & Evidence)</option>
-            </select>
-          </div>
-
           {/* Phone */}
           <div className="space-y-1.5">
             <label className="text-sm font-semibold text-slate-700">Phone Number (Optional)</label>
@@ -148,24 +131,6 @@ export default function Register() {
               />
             </div>
           </div>
-
-          {/* Department (If Authority or Field Worker) */}
-          {(formData.role === 'AUTHORITY' || formData.role === 'FIELD_WORKER') && (
-            <div className="space-y-1.5">
-              <label className="text-sm font-semibold text-slate-700">Department</label>
-              <div className="relative">
-                <Building2 className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="text"
-                  name="department"
-                  value={formData.department}
-                  onChange={handleChange}
-                  placeholder="e.g. Roads & Infrastructure"
-                  className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition"
-                />
-              </div>
-            </div>
-          )}
 
           <button
             type="submit"
