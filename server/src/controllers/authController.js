@@ -13,11 +13,11 @@ const VALID_ROLES = ['CITIZEN', 'AUTHORITY', 'FIELD_WORKER'];
 
 /**
  * POST /api/auth/register
- * Register a new user (Public registration strictly restricted to CITIZEN)
+ * Register a new user with chosen role (CITIZEN, AUTHORITY, or FIELD_WORKER)
  */
 const register = async (req, res) => {
   try {
-    const { name, email, password, phone } = req.body;
+    const { name, email, password, role = 'CITIZEN', phone, department } = req.body;
 
     // 1. Input Validation
     if (!name || typeof name !== 'string' || !name.trim()) {
@@ -41,6 +41,15 @@ const register = async (req, res) => {
       });
     }
 
+    // Role Validation
+    const normalizedRole = typeof role === 'string' ? role.trim().toUpperCase() : 'CITIZEN';
+    if (!VALID_ROLES.includes(normalizedRole)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role specified. Valid roles are: ${VALID_ROLES.join(', ')}.`,
+      });
+    }
+
     const normalizedEmail = email.trim().toLowerCase();
 
     // 2. Check for Duplicate Email
@@ -58,15 +67,15 @@ const register = async (req, res) => {
     // 3. Hash Password
     const hashedPassword = await hashPassword(password);
 
-    // 4. Create User in PostgreSQL via Prisma (Public registration strictly creates CITIZEN role)
+    // 4. Create User in PostgreSQL via Prisma with selected role
     const newUser = await prisma.user.create({
       data: {
         name: name.trim(),
         email: normalizedEmail,
         password: hashedPassword,
-        role: 'CITIZEN',
-        phone: phone ? phone.trim() : null,
-        department: null,
+        role: normalizedRole,
+        phone: phone && typeof phone === 'string' ? phone.trim() : null,
+        department: department && typeof department === 'string' ? department.trim() : null,
       },
     });
 

@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { getMyReports, verifyCitizenResolution, getImageUrl } from '../services/api';
 import LocationViewerModal from '../components/LocationViewerModal';
+import ReportTimeline from '../components/ReportTimeline';
 import {
   Activity,
   Plus,
@@ -21,6 +22,7 @@ import {
   Loader2,
   ThumbsUp,
   ThumbsDown,
+  Search,
 } from 'lucide-react';
 
 export default function MyReports() {
@@ -30,11 +32,49 @@ export default function MyReports() {
   const [successMsg, setSuccessMsg] = useState('');
   const [selectedReportForMap, setSelectedReportForMap] = useState(null);
 
+  // Filter states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [categoryFilter, setCategoryFilter] = useState('ALL');
+
   // Verification state per incident
   const [verifyingIncidentId, setVerifyingIncidentId] = useState(null);
   const [rejectingIncidentId, setRejectingIncidentId] = useState(null);
   const [reopenReason, setReopenReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Filter logic combining Search, Status, and Category
+  const filteredReports = useMemo(() => {
+    return reports.filter((report) => {
+      // 1. Search Query (Matches report title case-insensitively)
+      if (searchQuery.trim()) {
+        const query = searchQuery.trim().toLowerCase();
+        const matchesTitle = report.title?.toLowerCase().includes(query);
+        if (!matchesTitle) return false;
+      }
+
+      // 2. Status Filter
+      if (statusFilter !== 'ALL') {
+        const reportStatus = report.incident?.status || 'REPORTED';
+        if (reportStatus !== statusFilter) return false;
+      }
+
+      // 3. Category Filter
+      if (categoryFilter !== 'ALL') {
+        if (report.category !== categoryFilter) return false;
+      }
+
+      return true;
+    });
+  }, [reports, searchQuery, statusFilter, categoryFilter]);
+
+  const hasActiveFilters = searchQuery.trim() !== '' || statusFilter !== 'ALL' || categoryFilter !== 'ALL';
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('ALL');
+    setCategoryFilter('ALL');
+  };
 
   const fetchReports = async () => {
     setLoading(true);
@@ -183,6 +223,98 @@ export default function MyReports() {
           </div>
         )}
 
+        {/* SMART FILTERING TOOLBAR */}
+        {!loading && reports.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-sm space-y-3">
+            <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+              {/* Search by Report Title */}
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Search your reports by title..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-9 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:bg-white focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition p-1"
+                    title="Clear search query"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Status and Category Filter Dropdowns */}
+              <div className="flex flex-wrap items-center gap-2.5 text-xs">
+                {/* Status Dropdown */}
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-blue-600 transition"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="REPORTED">Reported</option>
+                  <option value="VERIFIED">Verified</option>
+                  <option value="ASSIGNED">Assigned</option>
+                  <option value="IN_PROGRESS">In Progress</option>
+                  <option value="RESOLVED_PENDING_VERIFICATION">Pending Verification</option>
+                  <option value="RESOLVED">Resolved</option>
+                  <option value="REOPENED">Reopened</option>
+                </select>
+
+                {/* Category Dropdown */}
+                <select
+                  value={categoryFilter}
+                  onChange={(e) => setCategoryFilter(e.target.value)}
+                  className="px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-blue-600 transition"
+                >
+                  <option value="ALL">All Categories</option>
+                  <option value="POTHOLE">Pothole</option>
+                  <option value="GARBAGE">Garbage</option>
+                  <option value="STREETLIGHT">Streetlight</option>
+                  <option value="DRAINAGE">Drainage</option>
+                  <option value="WATER_LEAKAGE">Water Leakage</option>
+                  <option value="DAMAGED_ROAD">Damaged Road</option>
+                  <option value="OTHER">Other</option>
+                </select>
+
+                {/* Clear All Filters Action */}
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl font-bold flex items-center space-x-1.5 transition"
+                    title="Reset all filters"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Clear Filters</span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Results Count & Filter Status Header */}
+            <div className="flex items-center justify-between text-xs text-slate-500 pt-2 border-t border-slate-100">
+              <span>
+                Showing <strong className="text-slate-900">{filteredReports.length}</strong> {filteredReports.length === 1 ? 'report' : 'reports'}
+                {hasActiveFilters && (
+                  <span> (filtered from <strong className="text-slate-900">{reports.length}</strong> total)</span>
+                )}
+              </span>
+              {hasActiveFilters && (
+                <span className="text-blue-600 font-semibold">
+                  Filters Active
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* LOADING STATE */}
         {loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -195,7 +327,7 @@ export default function MyReports() {
             ))}
           </div>
         ) : reports.length === 0 ? (
-          /* EMPTY STATE */
+          /* EMPTY STATE (NO REPORTS SUBMITTED AT ALL) */
           <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-4 shadow-sm">
             <div className="inline-flex p-4 bg-slate-100 text-slate-500 rounded-full">
               <AlertTriangle className="w-8 h-8" />
@@ -214,10 +346,31 @@ export default function MyReports() {
               <span>Report an Issue</span>
             </Link>
           </div>
+        ) : filteredReports.length === 0 ? (
+          /* NO MATCHING FILTER RESULTS */
+          <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center space-y-4 shadow-sm">
+            <div className="inline-flex p-4 bg-slate-100 text-slate-400 rounded-full">
+              <Search className="w-8 h-8 text-slate-400" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-lg font-bold text-slate-900">No Matching Reports Found</h3>
+              <p className="text-sm text-slate-600 max-w-sm mx-auto">
+                No reports match your current search query or filter selections. Try searching with different keywords or reset your filters.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="inline-flex items-center space-x-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reset All Filters</span>
+            </button>
+          </div>
         ) : (
           /* REPORTS LIST GRID */
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {reports.map((report) => {
+            {filteredReports.map((report) => {
               const incStatus = report.incident?.status || 'REPORTED';
               const resolution = report.incident?.resolution;
 
@@ -280,6 +433,9 @@ export default function MyReports() {
                         <span>{new Date(report.createdAt).toLocaleString()}</span>
                       </div>
                     </div>
+
+                    {/* Progress Status Timeline */}
+                    <ReportTimeline report={report} />
 
                     {/* RESOLUTION PENDING CITIZEN VERIFICATION BOX */}
                     {incStatus === 'RESOLVED_PENDING_VERIFICATION' && (

@@ -13,7 +13,16 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const from = location.state?.from?.pathname || '/dashboard';
+  const getRoleDashboard = (role) => {
+    switch (role) {
+      case 'AUTHORITY':
+        return '/authority';
+      case 'FIELD_WORKER':
+        return '/worker';
+      default:
+        return '/dashboard';
+    }
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -23,7 +32,14 @@ export default function Login() {
     try {
       const response = await login(email, password);
       if (response.success) {
-        navigate(from, { replace: true });
+        // Redirect according to the role returned by the backend:
+        // CITIZEN -> /dashboard, AUTHORITY -> /authority, FIELD_WORKER -> /worker
+        const roleDestination = getRoleDashboard(response.user?.role);
+        const destination = (location.state?.from?.pathname && location.state.from.pathname !== '/dashboard' && location.state.from.pathname !== '/')
+          ? location.state.from.pathname
+          : roleDestination;
+
+        navigate(destination, { replace: true });
       } else {
         setError(response.message || 'Login failed.');
       }
