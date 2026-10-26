@@ -135,6 +135,27 @@ async function processSlaEscalations(incidents = [], now = new Date()) {
           }).catch(() => {});
         }
 
+        // Create SLA warning notification for municipal authorities
+        try {
+          const authorities = await prisma.user.findMany({
+            where: { role: 'AUTHORITY', isActive: true },
+            select: { id: true },
+          });
+          for (const auth of authorities) {
+            await prisma.notification.create({
+              data: {
+                userId: auth.id,
+                incidentId: inc.id,
+                type: 'SLA_WARNING',
+                title: 'SLA Deadline Breached - Authority Alert',
+                message: `Incident "${inc.title}" (${inc.severity} severity) has breached its ${sla.slaHours}h SLA deadline and requires priority intervention.`,
+              },
+            }).catch(() => {});
+          }
+        } catch (authNotifErr) {
+          console.error('Failed to notify authorities of SLA breach:', authNotifErr);
+        }
+
         inc.isSlaBreached = true;
         escalations.push(inc.id);
       } catch (err) {

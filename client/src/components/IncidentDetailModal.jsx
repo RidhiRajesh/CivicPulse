@@ -19,6 +19,7 @@ import {
   Loader2,
   HardHat,
   UserCheck,
+  RotateCcw,
 } from 'lucide-react';
 
 export default function IncidentDetailModal({
@@ -29,6 +30,8 @@ export default function IncidentDetailModal({
   workers = [],
   onAssign,
   isAssigning = false,
+  onAdminResolve,
+  isAdminResolving = false,
 }) {
   const [comment, setComment] = useState('');
   const [showVerifyConfirm, setShowVerifyConfirm] = useState(false);
@@ -36,6 +39,10 @@ export default function IncidentDetailModal({
   // Worker assignment state
   const [selectedWorkerId, setSelectedWorkerId] = useState('');
   const [assignmentNotes, setAssignmentNotes] = useState('');
+
+  // Admin Override Closure state
+  const [adminReason, setAdminReason] = useState('');
+  const [showAdminResolveConfirm, setShowAdminResolveConfirm] = useState(false);
 
   if (!incident) return null;
 
@@ -57,6 +64,14 @@ export default function IncidentDetailModal({
     if (!selectedWorkerId) return;
     if (onAssign) {
       onAssign(incident.id, selectedWorkerId, assignmentNotes);
+    }
+  };
+
+  const handleAdminResolveSubmit = (e) => {
+    e.preventDefault();
+    if (!adminReason.trim()) return;
+    if (onAdminResolve) {
+      onAdminResolve(incident.id, adminReason.trim());
     }
   };
 
@@ -90,6 +105,13 @@ export default function IncidentDetailModal({
         return (
           <span className="px-3 py-1 bg-orange-50 text-orange-800 border border-orange-300 rounded-full text-xs font-bold">
             PENDING VERIFICATION
+          </span>
+        );
+      case 'REOPENED':
+        return (
+          <span className="inline-flex items-center space-x-1 px-3 py-1 bg-rose-100 text-rose-800 border border-rose-300 rounded-full text-xs font-bold">
+            <RotateCcw className="w-3 h-3 text-rose-600" />
+            <span>DISPUTED / REOPENED</span>
           </span>
         );
       case 'RESOLVED':
@@ -172,15 +194,82 @@ export default function IncidentDetailModal({
             <p className="text-sm sm:text-base text-slate-900 leading-relaxed font-medium">{incident.description}</p>
           </div>
 
-          {/* Field Worker Assignment Banner (For VERIFIED status) */}
-          {incident.status === 'VERIFIED' && (
-            <div className="bg-purple-50 border border-purple-200 rounded-2xl p-5 sm:p-6 space-y-4">
-              <div className="flex items-center space-x-2 text-purple-900 font-bold text-base">
-                <HardHat className="w-5 h-5 text-purple-600" />
-                <span>Assign Incident to Field Worker</span>
+          {/* Citizen Resolution Dispute Alert Banner */}
+          {(incident.status === 'REOPENED' || incident.resolution?.citizenFeedback || (incident.resolution?.verifications && incident.resolution.verifications.length > 0)) && (
+            <div className="bg-rose-50 border-2 border-rose-300 rounded-2xl p-5 sm:p-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center space-x-2 text-rose-900 font-bold text-base">
+                  <RotateCcw className="w-5 h-5 text-rose-600" />
+                  <span>Citizen Resolution Dispute Center</span>
+                </div>
+                <span className="px-2.5 py-0.5 bg-rose-100 text-rose-800 border border-rose-300 rounded-full text-xs font-bold">
+                  {incident.status === 'REOPENED' ? 'Active Dispute / Reopened' : 'Resolution Feedback'}
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-slate-700 leading-relaxed font-medium">
+                The reporting citizen reviewed the completed work proof and rejected or commented on the resolution, returning this issue to authority attention.
+              </p>
+
+              {/* Citizen Dispute Feedback / Reason */}
+              {incident.resolution?.citizenFeedback && (
+                <div className="bg-white p-4 rounded-xl border border-rose-200 space-y-1">
+                  <span className="text-xs font-bold text-rose-800 uppercase tracking-wider block">
+                    Citizen Stated Feedback / Dispute Reason:
+                  </span>
+                  <p className="text-sm font-semibold text-slate-900 italic">
+                    "{incident.resolution.citizenFeedback}"
+                  </p>
+                </div>
+              )}
+
+              {/* Multi-citizen verification history if available */}
+              {incident.resolution?.verifications && incident.resolution.verifications.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <span className="text-xs font-bold text-slate-600 uppercase block">Citizen Verification Log:</span>
+                  <div className="space-y-1 max-h-36 overflow-y-auto">
+                    {incident.resolution.verifications.map((v) => (
+                      <div key={v.id} className="text-xs p-2.5 bg-white rounded-lg border border-slate-200 flex items-start justify-between">
+                        <div>
+                          <span className={`font-bold mr-2 ${v.confirmed ? 'text-emerald-700' : 'text-rose-700'}`}>
+                            {v.confirmed ? '✓ Confirmed Resolved' : '✗ Disputed / Rejected'}:
+                          </span>
+                          <span className="text-slate-800 font-medium">{v.reason || (v.confirmed ? 'Confirmed resolved' : 'Disputed')}</span>
+                          <div className="text-[11px] text-slate-400 mt-0.5">By: {v.citizen?.name || 'Citizen'} ({v.citizen?.email})</div>
+                        </div>
+                        <span className="text-[11px] text-slate-400 font-mono">{new Date(v.createdAt).toLocaleDateString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Field Worker Assignment Banner (For VERIFIED, REOPENED, or ASSIGNED status) */}
+          {(incident.status === 'VERIFIED' || incident.status === 'REOPENED' || incident.status === 'ASSIGNED') && (
+            <div className={`border rounded-2xl p-5 sm:p-6 space-y-4 ${
+              incident.status === 'REOPENED'
+                ? 'bg-rose-50/70 border-rose-300'
+                : incident.status === 'ASSIGNED'
+                ? 'bg-slate-50 border-slate-300'
+                : 'bg-purple-50 border-purple-200'
+            }`}>
+              <div className="flex items-center space-x-2 font-bold text-base text-slate-900">
+                <HardHat className={`w-5 h-5 ${incident.status === 'REOPENED' ? 'text-rose-600' : 'text-purple-600'}`} />
+                <span>
+                  {incident.status === 'REOPENED'
+                    ? 'Re-dispatch Incident to Field Worker (Dispute Resolution)'
+                    : incident.status === 'ASSIGNED'
+                    ? 'Reassign Incident to Another Field Worker'
+                    : 'Assign Incident to Field Worker'}
+                </span>
               </div>
               <p className="text-xs sm:text-sm text-slate-600">
-                This incident is verified. Select an active municipal field worker to assign repair and resolution duties.
+                {incident.status === 'REOPENED'
+                  ? 'This incident was disputed by the citizen. Select an eligible municipal field worker to re-inspect and re-execute field work.'
+                  : incident.status === 'ASSIGNED'
+                  ? 'This incident is currently assigned. You can reassign it to a different field worker if needed.'
+                  : 'This incident is verified. Select an active municipal field worker to assign repair and resolution duties.'}
               </p>
 
               <form onSubmit={handleAssignSubmit} className="space-y-4">
@@ -206,7 +295,11 @@ export default function IncidentDetailModal({
                     <label className="text-xs text-slate-700 font-bold block mb-1.5">Assignment Instructions / Notes</label>
                     <input
                       type="text"
-                      placeholder="e.g. Inspect drain pit near bus stop, replace grate."
+                      placeholder={
+                        incident.status === 'REOPENED'
+                          ? 'e.g. Citizen reported hole not fully leveled. Re-pave surface.'
+                          : 'e.g. Inspect drain pit near bus stop, replace grate.'
+                      }
                       value={assignmentNotes}
                       onChange={(e) => setAssignmentNotes(e.target.value)}
                       className="w-full px-3.5 py-2.5 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-purple-600"
@@ -218,14 +311,24 @@ export default function IncidentDetailModal({
                   <button
                     type="submit"
                     disabled={!selectedWorkerId || isAssigning}
-                    className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs sm:text-sm rounded-xl transition shadow-sm flex items-center space-x-1.5 disabled:opacity-50"
+                    className={`px-5 py-2.5 text-white font-bold text-xs sm:text-sm rounded-xl transition shadow-sm flex items-center space-x-1.5 disabled:opacity-50 ${
+                      incident.status === 'REOPENED'
+                        ? 'bg-rose-600 hover:bg-rose-700'
+                        : 'bg-purple-600 hover:bg-purple-700'
+                    }`}
                   >
                     {isAssigning ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
                       <UserCheck className="w-4 h-4" />
                     )}
-                    <span>Assign Field Worker</span>
+                    <span>
+                      {incident.status === 'REOPENED'
+                        ? 'Re-dispatch Field Worker'
+                        : incident.status === 'ASSIGNED'
+                        ? 'Reassign Field Worker'
+                        : 'Assign Field Worker'}
+                    </span>
                   </button>
                 </div>
               </form>
@@ -466,7 +569,7 @@ export default function IncidentDetailModal({
           )}
         </div>
 
-        {/* Modal Footer / Verification Action */}
+        {/* Modal Footer / Actions */}
         <div className="p-6 border-t border-slate-200 bg-slate-50 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="text-xs sm:text-sm text-slate-600">
             {incident.status === 'REPORTED' ? (
@@ -479,15 +582,26 @@ export default function IncidentDetailModal({
                 <HardHat className="w-4 h-4 text-purple-600" />
                 <span>Action Required: Select and assign a Field Worker above.</span>
               </span>
+            ) : incident.status === 'REOPENED' ? (
+              <span className="text-rose-800 font-bold flex items-center space-x-1.5">
+                <RotateCcw className="w-4 h-4 text-rose-600" />
+                <span>Citizen Dispute: Re-dispatch above or execute administrative override closure below.</span>
+              </span>
+            ) : incident.status === 'RESOLVED_PENDING_VERIFICATION' ? (
+              <span className="text-orange-800 font-bold flex items-center space-x-1.5">
+                <Clock className="w-4 h-4 text-orange-600" />
+                <span>Awaiting Citizen Verification: Can be finalized via administrative override if needed.</span>
+              </span>
             ) : (
               <span className="text-emerald-800 font-bold flex items-center space-x-1.5">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                <span>Incident is assigned/active in lifecycle flow.</span>
+                <span>Incident is active or completed in municipal lifecycle flow.</span>
               </span>
             )}
           </div>
 
-          <div className="flex items-center space-x-3 w-full sm:w-auto justify-end">
+          <div className="flex flex-wrap items-center space-x-3 w-full sm:w-auto justify-end gap-2">
+            {/* Verify Incident Action (for REPORTED) */}
             {incident.status === 'REPORTED' && (
               <>
                 {!showVerifyConfirm ? (
@@ -523,6 +637,56 @@ export default function IncidentDetailModal({
                     <button
                       type="button"
                       onClick={() => setShowVerifyConfirm(false)}
+                      className="px-2.5 py-2 text-slate-600 hover:text-slate-900 text-xs font-bold"
+                    >
+                      Cancel
+                    </button>
+                  </form>
+                )}
+              </>
+            )}
+
+            {/* Administrative Override Closure (for REOPENED or RESOLVED_PENDING_VERIFICATION) */}
+            {(incident.status === 'REOPENED' || incident.status === 'RESOLVED_PENDING_VERIFICATION') && (
+              <>
+                {!showAdminResolveConfirm ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowAdminResolveConfirm(true)}
+                    className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs sm:text-sm rounded-xl transition shadow-sm flex items-center space-x-1.5"
+                    title="Administratively close this incident with a mandatory justification"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>Administrative Override Closure</span>
+                  </button>
+                ) : (
+                  <form onSubmit={handleAdminResolveSubmit} className="flex items-center space-x-2">
+                    <input
+                      type="text"
+                      placeholder="Mandatory administrative justification..."
+                      required
+                      value={adminReason}
+                      onChange={(e) => setAdminReason(e.target.value)}
+                      className="px-3.5 py-2 bg-white border border-rose-300 rounded-xl text-xs sm:text-sm text-slate-900 focus:outline-none focus:border-rose-600 w-64 font-medium"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isAdminResolving || !adminReason.trim()}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs sm:text-sm rounded-xl transition flex items-center space-x-1 disabled:opacity-50 shadow-sm"
+                    >
+                      {isAdminResolving ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Check className="w-4 h-4" />
+                      )}
+                      <span>Confirm Override</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowAdminResolveConfirm(false);
+                        setAdminReason('');
+                      }}
                       className="px-2.5 py-2 text-slate-600 hover:text-slate-900 text-xs font-bold"
                     >
                       Cancel

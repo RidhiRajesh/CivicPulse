@@ -6,6 +6,8 @@ const {
   getIncidentStats,
   verifyIncident,
   assignIncident,
+  adminResolveIncident,
+  exportIncidents,
   getWorkerAssignedIncidents,
   startWorkOnIncident,
   addProgressUpdate,
@@ -39,6 +41,7 @@ router.get('/worker/my', authenticateToken, authorizeRoles('FIELD_WORKER'), getW
 
 // Authority Endpoints
 router.get('/stats', authenticateToken, authorizeRoles('AUTHORITY'), getIncidentStats);
+router.get('/export', authenticateToken, authorizeRoles('AUTHORITY'), exportIncidents);
 router.get('/', authenticateToken, authorizeRoles('AUTHORITY'), getAllIncidents);
 
 // Parameterized Incident Details (Authority & Assigned Worker & Citizen)
@@ -47,6 +50,7 @@ router.get('/:id', authenticateToken, getIncidentById);
 // Authority Actions
 router.patch('/:id/verify', authenticateToken, authorizeRoles('AUTHORITY'), verifyIncident);
 router.patch('/:id/assign', authenticateToken, authorizeRoles('AUTHORITY'), assignIncident);
+router.patch('/:id/admin-resolve', authenticateToken, authorizeRoles('AUTHORITY'), adminResolveIncident);
 
 // Field Worker Actions
 router.patch('/:id/start', authenticateToken, authorizeRoles('FIELD_WORKER'), startWorkOnIncident);

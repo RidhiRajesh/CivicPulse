@@ -125,7 +125,17 @@ const getIncidentById = async (req, res) => {
           },
           orderBy: { createdAt: 'desc' },
         },
-        resolution: true,
+        resolution: {
+          include: {
+            worker: { select: { id: true, name: true, email: true, department: true } },
+            verifications: {
+              include: {
+                citizen: { select: { id: true, name: true, email: true } },
+              },
+              orderBy: { createdAt: 'desc' },
+            },
+          },
+        },
         assignments: {
           include: {
             worker: { select: { id: true, name: true, email: true } },
@@ -401,6 +411,26 @@ const assignIncident = async (req, res) => {
       },
     });
 
+    const isReopened = incident.status === 'REOPENED';
+    const isReassigned = incident.status === 'ASSIGNED';
+    const auditComment = notes
+      ? (isReopened ? `Dispute re-dispatch notes: ${notes}` : notes)
+      : (isReopened
+          ? `Disputed incident re-dispatched to field worker ${worker.name}.`
+          : isReassigned
+          ? `Incident reassigned to field worker ${worker.name}.`
+          : `Incident assigned to field worker ${worker.name}.`);
+
+    const notificationTitle = isReopened
+      ? 'Disputed Incident Re-Dispatched'
+      : isReassigned
+      ? 'Incident Reassigned'
+      : 'New Field Incident Assignment';
+
+    const notificationMessage = isReopened
+      ? `Incident "${incident.title}" has been re-dispatched to you for dispute resolution.${notes ? ` Notes: ${notes}` : ''}`
+      : `You have been assigned to incident: "${incident.title}".${notes ? ` Notes: ${notes}` : ''}`;
+
     // Audit log
     await prisma.statusUpdate.create({
       data: {
@@ -408,24 +438,28 @@ const assignIncident = async (req, res) => {
         userId: req.user.id,
         oldStatus: incident.status,
         newStatus: 'ASSIGNED',
-        comment: notes || `Incident assigned to field worker ${worker.name}.`,
+        comment: auditComment,
       },
     });
 
-    // Optional Notification record
+    // Notification record
     await prisma.notification.create({
       data: {
         userId: worker.id,
         incidentId: id,
         type: 'ASSIGNMENT',
-        title: 'New Field Incident Assignment',
-        message: `You have been assigned to incident: "${incident.title}".`,
+        title: notificationTitle,
+        message: notificationMessage,
       },
-    });
+    }).catch(() => {});
 
     return res.status(200).json({
       success: true,
-      message: `Incident successfully assigned to ${worker.name}.`,
+      message: isReopened
+        ? `Disputed incident successfully re-dispatched to ${worker.name}.`
+        : isReassigned
+        ? `Incident successfully reassigned to ${worker.name}.`
+        : `Incident successfully assigned to ${worker.name}.`,
       incident: updatedIncident,
       assignment,
     });
@@ -475,7 +509,17 @@ const getWorkerAssignedIncidents = async (req, res) => {
           },
           orderBy: { createdAt: 'desc' },
         },
-        resolution: true,
+        resolution: {
+          include: {
+            worker: { select: { id: true, name: true, email: true, department: true } },
+            verifications: {
+              include: {
+                citizen: { select: { id: true, name: true, email: true } },
+              },
+              orderBy: { createdAt: 'desc' },
+            },
+          },
+        },
       },
       orderBy: { updatedAt: 'desc' },
     });
@@ -894,6 +938,41 @@ const verifyResolutionByCitizen = async (req, res) => {
       },
     });
 
+    // 8. Generate dispute notification for authorities and worker if reopened
+    if (!confirmed) {
+      try {
+        const authorities = await prisma.user.findMany({
+          where: { role: 'AUTHORITY', isActive: true },
+          select: { id: true },
+        });
+        for (const auth of authorities) {
+          await prisma.notification.create({
+            data: {
+              userId: auth.id,
+              incidentId: id,
+              type: 'RESOLUTION_VERIFICATION',
+              title: 'Citizen Disputed Resolution - Incident Reopened',
+              message: `Citizen rejected resolution for "${incident.title}". Reason: ${reason || 'Issue still exists.'}`,
+            },
+          }).catch(() => {});
+        }
+
+        if (incident.resolution?.workerId) {
+          await prisma.notification.create({
+            data: {
+              userId: incident.resolution.workerId,
+              incidentId: id,
+              type: 'RESOLUTION_VERIFICATION',
+              title: 'Work Resolution Disputed',
+              message: `The citizen disputed repair work on "${incident.title}". Reason: ${reason || 'Issue still exists.'}`,
+            },
+          }).catch(() => {});
+        }
+      } catch (notifErr) {
+        console.error('Error generating dispute notifications:', notifErr);
+      }
+    }
+
     const responseMsg = confirmed
       ? 'Thank you. This civic issue has been marked as resolved.'
       : 'This issue has been reopened for further action.';
@@ -912,16 +991,352 @@ const verifyResolutionByCitizen = async (req, res) => {
   }
 };
 
+/**
+ * PATCH /api/incidents/:id/admin-resolve
+ * Manually resolve an incident via administrative override (AUTHORITY only)
+ * Settle citizen disputes on REOPENED or pending verification incidents with mandatory reason.
+ */
+const adminResolveIncident = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body || {};
+
+    if (!reason || typeof reason !== 'string' || !reason.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'A mandatory justification reason is required for administrative resolution.',
+      });
+    }
+
+    const incident = await prisma.incident.findUnique({
+      where: { id },
+      include: { resolution: true },
+    });
+
+    if (!incident) {
+      return res.status(404).json({
+        success: false,
+        message: 'Incident not found.',
+      });
+    }
+
+    if (incident.status === 'RESOLVED') {
+      return res.status(400).json({
+        success: false,
+        message: 'Incident is already marked as resolved.',
+      });
+    }
+
+    const trimmedReason = reason.trim();
+    const oldStatus = incident.status;
+
+    // 1. Update incident status to RESOLVED
+    const updatedIncident = await prisma.incident.update({
+      where: { id },
+      data: {
+        status: 'RESOLVED',
+      },
+    });
+
+    // 2. If a resolution record exists, update verification status
+    if (incident.resolution) {
+      await prisma.resolution.update({
+        where: { id: incident.resolution.id },
+        data: {
+          isVerifiedByCitizen: true,
+          citizenFeedback: incident.resolution.citizenFeedback
+            ? `${incident.resolution.citizenFeedback} | [Admin Override: ${trimmedReason}]`
+            : `[Admin Override: ${trimmedReason}]`,
+          verifiedAt: new Date(),
+        },
+      });
+    }
+
+    // 3. Record StatusUpdate audit trail entry
+    await prisma.statusUpdate.create({
+      data: {
+        incidentId: id,
+        userId: req.user.id,
+        oldStatus,
+        newStatus: 'RESOLVED',
+        comment: `ADMINISTRATIVE OVERRIDE CLOSURE: ${trimmedReason}`,
+      },
+    });
+
+    // 4. Notify creator citizen if available
+    if (incident.createdById) {
+      await prisma.notification.create({
+        data: {
+          userId: incident.createdById,
+          incidentId: id,
+          type: 'RESOLUTION_VERIFICATION',
+          title: 'Incident Resolved by Administrative Override',
+          message: `Municipal authority has closed incident "${incident.title}". Reason: ${trimmedReason}`,
+        },
+      }).catch(() => {});
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Incident resolved successfully via administrative override.',
+      incident: updatedIncident,
+    });
+  } catch (error) {
+    console.error('adminResolveIncident Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to administratively resolve incident.',
+    });
+  }
+};
+
+/**
+ * Helper to escape CSV values and protect against formula injection
+ */
+const sanitizeCsvValue = (val) => {
+  if (val === null || val === undefined) return '""';
+  let str = String(val).trim();
+
+  // Formula injection defense: prepend single quote if value begins with dangerous characters
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`;
+  }
+
+  // Escape double quotes and enclose in quotes if contains comma, quote, or newline
+  if (/[",\n\r]/.test(str)) {
+    str = `"${str.replace(/"/g, '""')}"`;
+  } else {
+    str = `"${str}"`;
+  }
+
+  return str;
+};
+
+/**
+ * GET /api/incidents/export
+ * Export incidents in CSV or GeoJSON format (AUTHORITY only)
+ */
+const exportIncidents = async (req, res) => {
+  try {
+    const { format = 'csv', category, status, severity, slaStatus, search } = req.query;
+
+    const whereClause = {};
+    if (category && category !== 'ALL') whereClause.category = category.toUpperCase();
+    if (status && status !== 'ALL') whereClause.status = status.toUpperCase();
+    if (severity && severity !== 'ALL') whereClause.severity = severity.toUpperCase();
+
+    // Query incidents
+    const rawIncidents = await prisma.incident.findMany({
+      where: whereClause,
+      include: {
+        _count: {
+          select: { reports: true, supporters: true },
+        },
+        assignments: {
+          include: {
+            worker: { select: { id: true, name: true, email: true, department: true } },
+          },
+          orderBy: { assignedAt: 'desc' },
+          take: 1,
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    // Idempotently process SLA escalations
+    await processSlaEscalations(rawIncidents);
+
+    // Calculate priority scores and SLA details
+    let incidents = rawIncidents.map((inc) => {
+      const supporterCount = inc._count?.supporters || inc.supportCount || 1;
+      const reportCount = inc._count?.reports || 1;
+      const currentPriority = calculatePriorityScore({
+        severity: inc.severity,
+        uniqueSupportersCount: supporterCount,
+        createdAt: inc.createdAt,
+        category: inc.category,
+        address: inc.address || '',
+      });
+      const currentImpact = calculateCommunityImpact(supporterCount);
+      const slaDetails = calculateSlaDetails(inc);
+      const latestAssignment = inc.assignments && inc.assignments.length > 0 ? inc.assignments[0] : null;
+
+      return {
+        ...inc,
+        priorityScore: currentPriority,
+        communityImpact: currentImpact,
+        supportCount: supporterCount,
+        reportCount,
+        slaStatus: slaDetails.slaStatus,
+        remainingHours: slaDetails.hoursRemaining,
+        slaDeadline: slaDetails.slaDeadline,
+        assignedWorker: latestAssignment?.worker ? latestAssignment.worker.name : 'Unassigned',
+      };
+    });
+
+    // Filter by calculated SLA status if passed
+    if (slaStatus && slaStatus !== 'ALL') {
+      const normSla = slaStatus.toUpperCase();
+      incidents = incidents.filter((inc) => inc.slaStatus === normSla);
+    }
+
+    // Filter by search query if passed
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      incidents = incidents.filter((inc) => {
+        return (
+          inc.title?.toLowerCase().includes(q) ||
+          inc.description?.toLowerCase().includes(q) ||
+          inc.address?.toLowerCase().includes(q)
+        );
+      });
+    }
+
+    // Sort descending by priority score
+    incidents.sort((a, b) => b.priorityScore - a.priorityScore);
+
+    const dateStr = new Date().toISOString().split('T')[0];
+
+    // CSV Format
+    if (format.toLowerCase() === 'csv') {
+      const headers = [
+        'Incident ID',
+        'Title',
+        'Category',
+        'Severity',
+        'Status',
+        'Priority Score',
+        'Community Impact',
+        'Reports Count',
+        'Supporters Count',
+        'SLA Deadline',
+        'SLA Status',
+        'Remaining Hours',
+        'Department',
+        'Assigned Worker',
+        'Address',
+        'Latitude',
+        'Longitude',
+        'Created At',
+      ];
+
+      const csvRows = [headers.map(sanitizeCsvValue).join(',')];
+
+      for (const inc of incidents) {
+        const row = [
+          inc.id,
+          inc.title,
+          inc.category,
+          inc.severity,
+          inc.status,
+          inc.priorityScore,
+          inc.communityImpact,
+          inc.reportCount,
+          inc.supportCount,
+          inc.slaDeadline ? new Date(inc.slaDeadline).toISOString() : '',
+          inc.slaStatus,
+          inc.remainingHours ?? '',
+          inc.department || 'General Maintenance',
+          inc.assignedWorker,
+          inc.address || '',
+          inc.latitude,
+          inc.longitude,
+          new Date(inc.createdAt).toISOString(),
+        ];
+        csvRows.push(row.map(sanitizeCsvValue).join(','));
+      }
+
+      const csvContent = '\uFEFF' + csvRows.join('\r\n');
+
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="civicpulse-incidents-export-${dateStr}.csv"`);
+      return res.status(200).send(csvContent);
+    }
+
+    // GeoJSON Format (RFC 7946 FeatureCollection)
+    if (format.toLowerCase() === 'geojson') {
+      const features = [];
+      let omittedCount = 0;
+
+      for (const inc of incidents) {
+        const lat = parseFloat(inc.latitude);
+        const lon = parseFloat(inc.longitude);
+
+        if (isNaN(lat) || isNaN(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+          omittedCount++;
+          continue;
+        }
+
+        features.push({
+          type: 'Feature',
+          geometry: {
+            type: 'Point',
+            // GeoJSON coordinates MUST be [longitude, latitude]
+            coordinates: [lon, lat],
+          },
+          properties: {
+            id: inc.id,
+            title: inc.title,
+            category: inc.category,
+            severity: inc.severity,
+            status: inc.status,
+            priorityScore: inc.priorityScore,
+            communityImpact: inc.communityImpact,
+            reportsCount: inc.reportCount,
+            supportersCount: inc.supportCount,
+            slaStatus: inc.slaStatus,
+            slaDeadline: inc.slaDeadline ? new Date(inc.slaDeadline).toISOString() : null,
+            remainingHours: inc.remainingHours ?? null,
+            department: inc.department || 'General Maintenance',
+            assignedWorker: inc.assignedWorker,
+            address: inc.address || '',
+            createdAt: new Date(inc.createdAt).toISOString(),
+          },
+        });
+      }
+
+      const geoJson = {
+        type: 'FeatureCollection',
+        properties: {
+          generatedAt: new Date().toISOString(),
+          totalIncidents: incidents.length,
+          locatedFeaturesCount: features.length,
+          omittedInvalidCoordinatesCount: omittedCount,
+        },
+        features,
+      };
+
+      res.setHeader('Content-Type', 'application/geo+json; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="civicpulse-incidents-${dateStr}.geojson"`);
+      return res.status(200).json(geoJson);
+    }
+
+    return res.status(400).json({
+      success: false,
+      message: `Unsupported export format '${format}'. Supported formats are 'csv' and 'geojson'.`,
+    });
+  } catch (error) {
+    console.error('exportIncidents Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to export incidents.',
+    });
+  }
+};
+
 module.exports = {
   getAllIncidents,
   getIncidentById,
   getIncidentStats,
   verifyIncident,
   assignIncident,
+  adminResolveIncident,
+  exportIncidents,
   getWorkerAssignedIncidents,
   startWorkOnIncident,
   addProgressUpdate,
   completeWork,
   verifyResolutionByCitizen,
+  sanitizeCsvValue,
 };
 

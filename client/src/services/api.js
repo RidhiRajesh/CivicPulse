@@ -159,6 +159,56 @@ export const assignIncident = async (id, workerId, notes = '') => {
   return response.data;
 };
 
+export const adminResolveIncident = async (id, reason) => {
+  const response = await api.patch(`/incidents/${id}/admin-resolve`, { reason });
+  return response.data;
+};
+
+export const exportIncidents = async (params = {}) => {
+  const response = await api.get('/incidents/export', {
+    params,
+    responseType: 'blob',
+  });
+
+  // Extract filename from Content-Disposition header if available
+  const disposition = response.headers['content-disposition'];
+  let filename = `civicpulse-export-${new Date().toISOString().split('T')[0]}.${params.format === 'geojson' ? 'geojson' : 'csv'}`;
+  if (disposition && disposition.includes('filename=')) {
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    if (match && match[1]) filename = match[1];
+  }
+
+  // Trigger browser download
+  const blobUrl = window.URL.createObjectURL(new Blob([response.data]));
+  const link = document.createElement('a');
+  link.href = blobUrl;
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.URL.revokeObjectURL(blobUrl);
+
+  return { success: true, filename };
+};
+
+/**
+ * Notification API Endpoints
+ */
+export const getNotifications = async (params = {}) => {
+  const response = await api.get('/notifications', { params });
+  return response.data;
+};
+
+export const markNotificationRead = async (id) => {
+  const response = await api.patch(`/notifications/${id}/read`);
+  return response.data;
+};
+
+export const markAllNotificationsRead = async () => {
+  const response = await api.patch('/notifications/read-all');
+  return response.data;
+};
+
 /**
  * Field Worker API Endpoints
  */

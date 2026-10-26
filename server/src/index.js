@@ -12,6 +12,7 @@ const authRoutes = require('./routes/authRoutes');
 const reportRoutes = require('./routes/reportRoutes');
 const incidentRoutes = require('./routes/incidentRoutes');
 const workerRoutes = require('./routes/workerRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -35,6 +36,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/incidents', incidentRoutes);
 app.use('/api/workers', workerRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Root endpoint info
 app.get('/', (req, res) => {
@@ -64,8 +66,12 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`[CivicPulse Server] Running on http://localhost:${PORT}`);
-  console.log(`[CivicPulse Server] Health check: http://localhost:${PORT}/api/health`);
-});
+// Start Server if directly executed
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`[CivicPulse Server] Running on http://localhost:${PORT}`);
+    console.log(`[CivicPulse Server] Health check: http://localhost:${PORT}/api/health`);
+  });
+}
+
+module.exports = app;

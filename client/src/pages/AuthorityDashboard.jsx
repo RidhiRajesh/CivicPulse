@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -8,6 +8,11 @@ import {
   verifyIncident,
   getWorkers,
   assignIncident,
+  adminResolveIncident,
+  exportIncidents,
+  getNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
 } from '../services/api';
 import IncidentsMap from '../components/IncidentsMap';
 import IncidentDetailModal from '../components/IncidentDetailModal';
@@ -30,6 +35,13 @@ import {
   Loader2,
   TrendingUp,
   HardHat,
+  Bell,
+  BellOff,
+  Download,
+  RotateCcw,
+  CheckCheck,
+  X,
+  FileText,
 } from 'lucide-react';
 
 export default function AuthorityDashboard() {
@@ -65,6 +77,28 @@ export default function AuthorityDashboard() {
   const [fetchingDetails, setFetchingDetails] = useState(false);
   const [verifyingId, setVerifyingId] = useState(null);
   const [isAssigning, setIsAssigning] = useState(false);
+  const [isAdminResolving, setIsAdminResolving] = useState(false);
+
+  // Export state
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
+
+  // Notifications state
+  const [notifications, setNotifications] = useState([]);
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifError, setNotifError] = useState('');
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [browserNotifPermission, setBrowserNotifPermission] = useState(
+    typeof window !== 'undefined' && 'Notification' in window ? Notification.permission : 'unsupported'
+  );
+  const processedNotifIds = useRef(new Set());
+  const initialFetchDone = useRef(false);
+
+  // Reopened / Dispute count calculation
+  const reopenedIncidents = useMemo(() => {
+    return incidents.filter((inc) => inc.status === 'REOPENED');
+  }, [incidents]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -87,9 +121,128 @@ export default function AuthorityDashboard() {
     }
   };
 
+  // Fetch notifications
+  const fetchNotificationsData = async (silent = false) => {
+    if (!silent) setNotifLoading(true);
+    setNotifError('');
+    try {
+      const res = await getNotifications({ limit: 40 });
+      if (res.success) {
+        setNotifications(res.notifications || []);
+        setUnreadNotifCount(res.unreadCount || 0);
+
+        // Check for new notifications to trigger browser notifications
+        if (
+          initialFetchDone.current &&
+          typeof window !== 'undefined' &&
+          'Notification' in window &&
+          Notification.permission === 'granted' &&
+          document.hidden
+        ) {
+          (res.notifications || []).forEach((notif) => {
+            if (!notif.isRead && !processedNotifIds.current.has(notif.id)) {
+              try {
+                new Notification(notif.title, {
+                  body: notif.message,
+                  icon: '/favicon.ico',
+                  tag: notif.id,
+                });
+              } catch (e) {
+                console.error('Browser notification error:', e);
+              }
+            }
+          });
+        }
+
+        // Mark all current IDs as processed
+        (res.notifications || []).forEach((n) => processedNotifIds.current.add(n.id));
+        initialFetchDone.current = true;
+      }
+    } catch (err) {
+      console.error('Error fetching notifications:', err);
+      if (!silent) setNotifError('Failed to load notifications.');
+    } finally {
+      if (!silent) setNotifLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchData();
+    fetchNotificationsData();
+
+    // Poll notifications every 30 seconds
+    const interval = setInterval(() => {
+      fetchNotificationsData(true);
+    }, 30000);
+
+    // Refresh notifications when user returns to tab
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        fetchNotificationsData(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
+
+  // Request browser notification permission explicitly
+  const handleRequestBrowserNotif = async () => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      alert('Browser notifications are not supported in your browser.');
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setBrowserNotifPermission(permission);
+      if (permission === 'granted') {
+        new Notification('CivicPulse Authority Notifications Enabled', {
+          body: 'You will receive real-time alerts for SLA breaches and citizen disputes.',
+        });
+      }
+    } catch (err) {
+      console.error('Failed to request notification permission:', err);
+    }
+  };
+
+  const handleMarkAsRead = async (notifId) => {
+    try {
+      const res = await markNotificationRead(notifId);
+      if (res.success) {
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notifId ? { ...n, isRead: true } : n))
+        );
+        setUnreadNotifCount((prev) => Math.max(0, prev - 1));
+      }
+    } catch (err) {
+      console.error('Error marking notification as read:', err);
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      const res = await markAllNotificationsRead();
+      if (res.success) {
+        setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+        setUnreadNotifCount(0);
+      }
+    } catch (err) {
+      console.error('Error marking all notifications as read:', err);
+    }
+  };
+
+  const handleNotificationClick = async (notif) => {
+    if (!notif.isRead) {
+      handleMarkAsRead(notif.id);
+    }
+    if (notif.incidentId) {
+      setIsNotificationOpen(false);
+      handleInspectIncident({ id: notif.incidentId });
+    }
+  };
 
   const handleAssignWorker = async (incidentId, workerId, notes) => {
     setIsAssigning(true);
@@ -98,15 +251,61 @@ export default function AuthorityDashboard() {
     try {
       const res = await assignIncident(incidentId, workerId, notes);
       if (res.success) {
-        setSuccessMsg(`Incident successfully assigned to field worker.`);
+        setSuccessMsg(res.message || 'Incident successfully assigned to field worker.');
         setSelectedIncident(null);
         fetchData();
+        fetchNotificationsData(true);
       }
     } catch (err) {
       console.error('Error assigning worker:', err);
       setError(err.response?.data?.message || 'Failed to assign field worker.');
     } finally {
       setIsAssigning(false);
+    }
+  };
+
+  const handleAdminResolve = async (incidentId, reason) => {
+    setIsAdminResolving(true);
+    setError('');
+    setSuccessMsg('');
+    try {
+      const res = await adminResolveIncident(incidentId, reason);
+      if (res.success) {
+        setSuccessMsg(res.message || `Incident #${incidentId.slice(0, 8)} administratively resolved.`);
+        setSelectedIncident(null);
+        fetchData();
+        fetchNotificationsData(true);
+      }
+    } catch (err) {
+      console.error('Error in administrative resolution:', err);
+      setError(err.response?.data?.message || 'Failed to administratively resolve incident.');
+    } finally {
+      setIsAdminResolving(false);
+    }
+  };
+
+  const handleExport = async (format) => {
+    setIsExporting(true);
+    setError('');
+    setSuccessMsg('');
+    try {
+      const params = {
+        format,
+        category: categoryFilter,
+        status: statusFilter,
+        severity: severityFilter,
+        slaStatus: slaFilter,
+        search: searchQuery,
+      };
+      const res = await exportIncidents(params);
+      if (res.success) {
+        setSuccessMsg(`Incident export downloaded successfully: ${res.filename}`);
+      }
+    } catch (err) {
+      console.error('Export Error:', err);
+      setError(err.response?.data?.message || 'Failed to export incidents.');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -162,6 +361,7 @@ export default function AuthorityDashboard() {
         setSuccessMsg(`Incident #${incidentId.slice(0, 8)} successfully verified!`);
         setSelectedIncident(null);
         fetchData();
+        fetchNotificationsData(true);
       }
     } catch (err) {
       console.error('Error verifying incident:', err);
@@ -171,10 +371,25 @@ export default function AuthorityDashboard() {
     }
   };
 
+  const getNotificationIcon = (type) => {
+    switch (type) {
+      case 'SLA_WARNING':
+        return <AlertTriangle className="w-4 h-4 text-rose-600" />;
+      case 'RESOLUTION_VERIFICATION':
+        return <RotateCcw className="w-4 h-4 text-rose-600" />;
+      case 'ASSIGNMENT':
+        return <HardHat className="w-4 h-4 text-purple-600" />;
+      case 'INCIDENT_UPDATE':
+        return <Activity className="w-4 h-4 text-blue-600" />;
+      default:
+        return <Shield className="w-4 h-4 text-slate-600" />;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-16">
       {/* Navbar */}
-      <nav className="border-b border-slate-200 bg-white/90 backdrop-blur-md sticky top-0 z-50 shadow-sm">
+      <nav className="border-b border-slate-200 bg-white/90 backdrop-blur-md sticky top-0 z-40 shadow-sm">
         <div className="w-full max-w-[1700px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center space-x-3">
             <div className="p-2 bg-purple-50 text-purple-600 rounded-xl border border-purple-100">
@@ -190,13 +405,34 @@ export default function AuthorityDashboard() {
             </div>
           </div>
 
-          <div className="flex items-center space-x-4">
+          <div className="flex items-center space-x-3 sm:space-x-4">
             <Link
               to="/dashboard"
               className="text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg border border-slate-200 transition"
             >
               Main Dashboard
             </Link>
+
+            {/* Smart Notification Centre Bell */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsNotificationOpen(!isNotificationOpen)}
+                className={`relative p-2 rounded-xl border transition ${
+                  isNotificationOpen
+                    ? 'bg-purple-100 text-purple-700 border-purple-300'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                }`}
+                title="Smart Notification Centre"
+              >
+                <Bell className="w-4 h-4" />
+                {unreadNotifCount > 0 && (
+                  <span className="absolute -top-1 -right-1 px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[10px] font-extrabold shadow-sm min-w-[18px] text-center animate-pulse">
+                    {unreadNotifCount > 99 ? '99+' : unreadNotifCount}
+                  </span>
+                )}
+              </button>
+            </div>
 
             <button
               onClick={fetchData}
@@ -231,9 +467,27 @@ export default function AuthorityDashboard() {
             </p>
           </div>
 
-          <div className="flex items-center space-x-2 bg-purple-50 border border-purple-200 px-4 py-2.5 rounded-xl text-xs font-bold text-purple-800 shadow-sm">
-            <TrendingUp className="w-4 h-4 text-purple-600" />
-            <span>Problem-Centric Correlation Active</span>
+          <div className="flex flex-wrap items-center gap-3">
+            {reopenedIncidents.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setStatusFilter(statusFilter === 'REOPENED' ? 'ALL' : 'REOPENED')}
+                className={`flex items-center space-x-2 px-3.5 py-2.5 rounded-xl text-xs font-bold transition shadow-sm border ${
+                  statusFilter === 'REOPENED'
+                    ? 'bg-rose-600 text-white border-rose-600'
+                    : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200'
+                }`}
+                title="Filter to Citizen Disputed Incidents"
+              >
+                <RotateCcw className="w-4 h-4 text-rose-500" />
+                <span>{reopenedIncidents.length} Citizen Dispute{reopenedIncidents.length === 1 ? '' : 's'} Active</span>
+              </button>
+            )}
+
+            <div className="flex items-center space-x-2 bg-purple-50 border border-purple-200 px-4 py-2.5 rounded-xl text-xs font-bold text-purple-800 shadow-sm">
+              <TrendingUp className="w-4 h-4 text-purple-600" />
+              <span>Problem-Centric Correlation Active</span>
+            </div>
           </div>
         </div>
 
@@ -294,7 +548,7 @@ export default function AuthorityDashboard() {
           </div>
         </div>
 
-        {/* Toolbar: Search, Filters, View Mode Toggle */}
+        {/* Toolbar: Search, Filters, Dispute Tab, Export, View Mode Toggle */}
         <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 shadow-sm">
           {/* Search Box */}
           <div className="relative flex-1">
@@ -308,13 +562,35 @@ export default function AuthorityDashboard() {
             />
           </div>
 
-          {/* Filters */}
+          {/* Filters and Actions */}
           <div className="flex flex-wrap items-center gap-2.5 text-xs">
+            {/* Quick Citizen Disputes Toggle Button */}
+            <button
+              type="button"
+              onClick={() => setStatusFilter(statusFilter === 'REOPENED' ? 'ALL' : 'REOPENED')}
+              className={`flex items-center space-x-1.5 px-3 py-2.5 rounded-xl font-bold border transition ${
+                statusFilter === 'REOPENED'
+                  ? 'bg-rose-600 text-white border-rose-600 shadow-sm'
+                  : 'bg-rose-50 hover:bg-rose-100 text-rose-800 border-rose-200'
+              }`}
+              title="Filter to Citizen Disputed & Reopened Incidents"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Disputes</span>
+              {reopenedIncidents.length > 0 && (
+                <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                  statusFilter === 'REOPENED' ? 'bg-white text-rose-700' : 'bg-rose-600 text-white'
+                }`}>
+                  {reopenedIncidents.length}
+                </span>
+              )}
+            </button>
+
             {/* Category Filter */}
             <select
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value)}
-              className="px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-purple-600"
+              className="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-purple-600"
             >
               <option value="ALL">All Categories</option>
               <option value="POTHOLE">Pothole</option>
@@ -330,7 +606,7 @@ export default function AuthorityDashboard() {
             <select
               value={severityFilter}
               onChange={(e) => setSeverityFilter(e.target.value)}
-              className="px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-purple-600"
+              className="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-purple-600"
             >
               <option value="ALL">All Severities</option>
               <option value="LOW">Low</option>
@@ -343,13 +619,15 @@ export default function AuthorityDashboard() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-purple-600"
+              className="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-purple-600"
             >
               <option value="ALL">All Statuses</option>
               <option value="REPORTED">Reported (Unverified)</option>
               <option value="VERIFIED">Verified</option>
               <option value="ASSIGNED">Assigned</option>
               <option value="IN_PROGRESS">In Progress</option>
+              <option value="RESOLVED_PENDING_VERIFICATION">Pending Verification</option>
+              <option value="REOPENED">Disputed / Reopened</option>
               <option value="RESOLVED">Resolved</option>
             </select>
 
@@ -357,13 +635,54 @@ export default function AuthorityDashboard() {
             <select
               value={slaFilter}
               onChange={(e) => setSlaFilter(e.target.value)}
-              className="px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-purple-600"
+              className="px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-slate-800 font-semibold focus:outline-none focus:bg-white focus:border-purple-600"
             >
               <option value="ALL">All SLA Statuses</option>
               <option value="ON_TRACK">On Track</option>
               <option value="WARNING">Warning (≤20% SLA)</option>
               <option value="OVERDUE">Overdue (Breached)</option>
             </select>
+
+            {/* Export Dropdown Button */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
+                disabled={isExporting}
+                className="flex items-center space-x-1.5 px-3 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-300 rounded-xl font-bold transition disabled:opacity-50"
+                title="Export filtered incident records"
+              >
+                {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                <span>Export</span>
+              </button>
+
+              {exportDropdownOpen && (
+                <div className="absolute right-0 mt-2 w-48 bg-white border border-slate-200 rounded-xl shadow-xl z-50 p-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportDropdownOpen(false);
+                      handleExport('csv');
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-slate-100 rounded-lg font-semibold text-slate-800 flex items-center space-x-2 transition"
+                  >
+                    <TableIcon className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Export as CSV (.csv)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportDropdownOpen(false);
+                      handleExport('geojson');
+                    }}
+                    className="w-full text-left px-3 py-2 hover:bg-slate-100 rounded-lg font-semibold text-slate-800 flex items-center space-x-2 transition"
+                  >
+                    <MapIcon className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Export as GeoJSON (.geojson)</span>
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* View Mode Toggle */}
             <div className="flex items-center bg-slate-100 border border-slate-200 p-1 rounded-xl">
@@ -431,12 +750,17 @@ export default function AuthorityDashboard() {
                     filteredIncidents.map((incident) => {
                       const supporterCount = incident._count?.supporters || incident.supportCount || 1;
                       const reportCount = incident._count?.reports || incident.reports?.length || 1;
+                      const isDisputed = incident.status === 'REOPENED';
 
                       return (
                         <tr
                           key={incident.id}
                           className={`hover:bg-slate-50 transition ${
-                            incident.slaStatus === 'OVERDUE' ? 'bg-rose-50/70 border-l-4 border-l-rose-500' : ''
+                            isDisputed
+                              ? 'bg-rose-50/70 border-l-4 border-l-rose-600'
+                              : incident.slaStatus === 'OVERDUE'
+                              ? 'bg-rose-50/70 border-l-4 border-l-rose-500'
+                              : ''
                           }`}
                         >
                           {/* Priority Score */}
@@ -450,7 +774,14 @@ export default function AuthorityDashboard() {
                           {/* Incident Title & Category */}
                           <td className="py-4 px-4">
                             <div className="font-bold text-slate-900">{incident.title}</div>
-                            <div className="text-xs text-blue-700 font-mono font-semibold">{incident.category}</div>
+                            <div className="text-xs text-blue-700 font-mono font-semibold flex items-center space-x-2">
+                              <span>{incident.category}</span>
+                              {isDisputed && (
+                                <span className="text-[10px] px-1.5 py-0.2 bg-rose-100 text-rose-800 rounded font-bold uppercase">
+                                  Citizen Disputed
+                                </span>
+                              )}
+                            </div>
                           </td>
 
                           {/* Location */}
@@ -487,10 +818,14 @@ export default function AuthorityDashboard() {
                                   ? 'bg-purple-50 text-purple-800 border border-purple-200'
                                   : incident.status === 'IN_PROGRESS'
                                   ? 'bg-cyan-50 text-cyan-800 border border-cyan-200'
+                                  : incident.status === 'RESOLVED_PENDING_VERIFICATION'
+                                  ? 'bg-orange-50 text-orange-800 border border-orange-300'
+                                  : incident.status === 'REOPENED'
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-300 inline-flex items-center space-x-1'
                                   : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                               }`}
                             >
-                              {incident.status}
+                              {incident.status === 'REOPENED' ? 'DISPUTED' : incident.status}
                             </span>
                           </td>
 
@@ -576,6 +911,166 @@ export default function AuthorityDashboard() {
         )}
       </main>
 
+      {/* Smart Notification Centre Drawer */}
+      {isNotificationOpen && (
+        <div className="fixed inset-0 z-50 overflow-hidden font-sans">
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+            onClick={() => setIsNotificationOpen(false)}
+          />
+
+          <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+            <div className="w-screen max-w-md bg-white border-l border-slate-200 shadow-2xl flex flex-col">
+              {/* Drawer Header */}
+              <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between bg-slate-50">
+                <div className="flex items-center space-x-2">
+                  <div className="p-2 bg-purple-50 text-purple-600 rounded-xl border border-purple-200">
+                    <Bell className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">Notification Centre</h2>
+                    <span className="text-xs text-slate-500">
+                      {unreadNotifCount} unread municipal alert{unreadNotifCount === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center space-x-2">
+                  {unreadNotifCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={handleMarkAllAsRead}
+                      className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-semibold flex items-center space-x-1 transition"
+                      title="Mark all as read"
+                    >
+                      <CheckCheck className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Mark all read</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsNotificationOpen(false)}
+                    className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Browser Notification Opt-In Banner */}
+              <div className="p-3 bg-purple-50/70 border-b border-purple-100 flex items-center justify-between text-xs">
+                <div className="space-y-0.5 pr-2">
+                  <span className="font-bold text-purple-900 block">Browser Alerts</span>
+                  <span className="text-purple-700 text-[11px]">
+                    {browserNotifPermission === 'granted'
+                      ? '✓ Browser desktop alerts are active for background warnings.'
+                      : browserNotifPermission === 'denied'
+                      ? '⚠️ Browser notifications blocked in your browser settings.'
+                      : 'Enable desktop notifications for real-time SLA & dispute alerts.'}
+                  </span>
+                </div>
+
+                {browserNotifPermission === 'default' && (
+                  <button
+                    type="button"
+                    onClick={handleRequestBrowserNotif}
+                    className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-bold text-xs whitespace-nowrap transition shadow-xs"
+                  >
+                    Enable
+                  </button>
+                )}
+              </div>
+
+              {/* Notifications List */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+                {notifLoading && notifications.length === 0 ? (
+                  <div className="py-16 text-center space-y-2">
+                    <Loader2 className="w-6 h-6 text-purple-600 animate-spin mx-auto" />
+                    <span className="text-xs text-slate-500 font-medium">Fetching alerts...</span>
+                  </div>
+                ) : notifError ? (
+                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl text-center space-y-2">
+                    <span className="text-xs text-rose-700 font-medium block">{notifError}</span>
+                    <button
+                      type="button"
+                      onClick={() => fetchNotificationsData()}
+                      className="px-3 py-1 bg-rose-100 hover:bg-rose-200 text-rose-800 rounded-lg text-xs font-bold transition"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : notifications.length === 0 ? (
+                  <div className="py-16 text-center space-y-2">
+                    <BellOff className="w-8 h-8 text-slate-300 mx-auto" />
+                    <span className="text-sm font-semibold text-slate-600 block">You're all caught up!</span>
+                    <span className="text-xs text-slate-400">No authority notifications at this time.</span>
+                  </div>
+                ) : (
+                  notifications.map((notif) => (
+                    <div
+                      key={notif.id}
+                      onClick={() => handleNotificationClick(notif)}
+                      className={`p-3.5 rounded-xl border text-xs transition cursor-pointer flex items-start space-x-3 ${
+                        notif.isRead
+                          ? 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                          : 'bg-purple-50/50 hover:bg-purple-50 border-purple-200 text-slate-900 shadow-xs'
+                      }`}
+                    >
+                      <div className="p-2 bg-white rounded-lg border border-slate-200 shadow-xs shrink-0 mt-0.5">
+                        {getNotificationIcon(notif.type)}
+                      </div>
+
+                      <div className="flex-1 space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className={`font-bold ${notif.isRead ? 'text-slate-800' : 'text-purple-950 font-extrabold'}`}>
+                            {notif.title}
+                          </span>
+                          {!notif.isRead && (
+                            <span className="w-2 h-2 rounded-full bg-purple-600 shrink-0 ml-2" />
+                          )}
+                        </div>
+
+                        <p className="text-slate-600 leading-relaxed text-[11px]">
+                          {notif.message}
+                        </p>
+
+                        <div className="flex items-center justify-between pt-1 border-t border-slate-100 text-[10px] text-slate-400">
+                          <span className="font-mono">
+                            {new Date(notif.createdAt).toLocaleDateString()} {new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+
+                          <div className="flex items-center space-x-2">
+                            {notif.incidentId && (
+                              <span className="text-purple-600 font-bold hover:underline">
+                                Inspect Incident →
+                              </span>
+                            )}
+                            {!notif.isRead && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleMarkAsRead(notif.id);
+                                }}
+                                className="text-slate-400 hover:text-purple-700 font-medium"
+                                title="Mark read"
+                              >
+                                Mark read
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Incident Details Modal */}
       {selectedIncident && (
         <IncidentDetailModal
@@ -586,6 +1081,8 @@ export default function AuthorityDashboard() {
           workers={workers}
           onAssign={handleAssignWorker}
           isAssigning={isAssigning}
+          onAdminResolve={handleAdminResolve}
+          isAdminResolving={isAdminResolving}
         />
       )}
     </div>
